@@ -1,6 +1,6 @@
 services:
   api:
-    image: ghcr.io/2024-2025-estia-bihar/final_projet_lucg:latest
+    image: ghcr.io/lucgmensah/weather-forecasting-api:latest
     ports:
       - "8000:8000"
     volumes:

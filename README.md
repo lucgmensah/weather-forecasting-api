@@ -1,131 +1,79 @@
-# API Time Series et Classification Multimodale
+# Weather Time-Series Forecasting API
 
-Ce projet combine deux composantes majeures : une API de prédiction de séries temporelles météorologiques et un système de classification multimodale de textes. L'objectif est de fournir une solution complète pour l'analyse et la prédiction de données temporelles, ainsi que la classification de données textuelles.
+A FastAPI service that ingests historical weather data, trains forecasting models on demand and serves predictions with their error against observed values.
 
-## Table des matières
+**Result:** R² = 97% on the temperature forecasting task (Random Forest regressor on engineered time features).
 
-- [Description](#description)
-- [Fonctionnalités](#fonctionnalités)
-- [Architecture](#architecture)
-- [Pipeline CI/CD](#pipeline-cicd)
-- [Installation](#installation)
-- [Utilisation de l'API](#utilisation-de-lapi)
-- [Contributeurs](#contributeurs)
-- [Licence](#licence)
+## Why
 
-## Description
-
-L'API de séries temporelles est basée sur FastAPI et utilise des modèles de machine learning pour prédire des données météorologiques futures.
-
-## Fonctionnalités
-
-- **Récupération de données météorologiques historiques**
-- **Entraînement de modèles prédictifs** sur une periode donnée
-- **Génération de prédictions futures** basées sur les modèles entraînés
-- **Évaluation de la performance** des modèles via des métriques (RMSE)
-- **Interface REST** pour l'intégration facile avec d'autres systèmes
+Forecasting models usually live in notebooks. This project wraps the full lifecycle (data ingestion, training, versioned model registry, prediction, evaluation) behind a REST API, so a model can be retrained and compared from any client.
 
 ## Architecture
 
-Le projet est structuré selon une architecture modulaire :
-
-### Couche d'accès aux données (data)
-- `data_ingestion.py` : Contient les fonctions pour recupérer les données météorologiques depuis une API externe
-- `db_init.py` : Initialise la base de données SQLite
-- `db_class.py` : Définit les modèles ORM SQLAlchemy
-
-### Couche modèle (model)
-- `predict_series.py` : Contient le pipeline d'entraînement et de prédiction des modèles de séries temporelles
-
-### Couche API (api)
-- `main.py` : Points d'entrée API FastAPI
-- `tests/` : Tests unitaires et d'intégration
-
-
-## Pipeline CI/CD
-
-Le pipeline CI/CD est configuré pour automatiser les tests et le déploiement de l'API. Il utilise GitHub Actions pour exécuter les tests à chaque push sur les branches master ou develop.
-
-### 1er Etape : Lint
-
-Le code est analysé pour détecter les erreurs de syntaxe et les problèmes de style. Des outils comme `flake8` et `black` sont utilisés pour garantir la qualité du code.
-
-### 2e Etape : Tests
-
-Des tests unitaires et d'intégration sont exécutés pour valider le bon fonctionnement de l'API. Les tests sont écrits avec `pytest` et couvrent les principales fonctionnalités de l'API. Ils sont disponibles dans le répertoire `api/tests/`.
-
-### 3e Etape : Versionning
-
-Cette étape génère une nouvelle version de l'application basée sur le dernier commit Git. Un identifiant unique est généré à partir du hash du commit et utilisé pour créer un tag d'image Docker. 
-
-### 4e Etape : Build et deploiement
-
-L'image Docker est construite et déployée sur un registre Docker (Github package). On s'assure que la derniere image ait le tag `latest` en plus du tag de version.
-
-## Installation
-
-### Prérequis
-- Docker et Docker Compose installés
-- Git pour cloner le dépôt
-
-### Étapes d'installation
-1. Cloner le dépôt
-   ```bash
-   git clone https://github.com/2024-2025-estia-bihar/final_projet_lucg.git
-   cd final_projet_lucg
-   ```
-
-2. Connectez-vous à GitHub Packages :
-    ```bash
-    echo $CR_PAT | docker login ghcr.io -u USERNAME --password-stdin
-    ```
-    Remplacez `CR_PAT` par votre token d'accès personnel GitHub et `USERNAME` par votre nom d'utilisateur GitHub. L'utilisateur doit avoir les droits d'accès au registre de packages.
-
-3. Construire et démarrer les conteneurs Docker
-   ```bash
-   docker-compose up -d
-   ```
-
-Une fois les conteneurs démarrés, l'API est accessible à l'adresse http://localhost:8000.
-
-## Utilisation de l'API
-
-### 1. Documentation interactive
-Accédez à la documentation interactive Swagger UI :
-```
-http://localhost:8000/docs
+```mermaid
+flowchart LR
+    OM[Open-Meteo archive API] -->|hourly temperature| ING[data/data_ingestion.py]
+    ING --> DB[(SQLite via SQLAlchemy)]
+    API[FastAPI api/main.py] -->|/fetch_data| ING
+    API -->|/train_model| TRAIN[model/predict_series.py]
+    TRAIN -->|versioned .pkl| REG[(model registry)]
+    TRAIN --> DB
+    API -->|/predict| REG
+    API -->|/predictions + RMSE| DB
 ```
 
-### 2. Récupération de données météorologiques
+- `data/`: ingestion from the [Open-Meteo](https://open-meteo.com/) archive API and SQLAlchemy models (`Model`, `RealTemperature`, `Prediction`).
+- `model/`: feature engineering (calendar and lag features), training and prediction pipeline. Each trained model is saved with a version in the registry.
+- `api/`: FastAPI endpoints, plus unit and integration tests in `api/tests/`.
+- `notebooks/time_series.ipynb`: exploration and model selection.
+
+## Run it
+
 ```bash
-curl -X POST "http://localhost:8000/fetch_data" -H "Content-Type: application/json" -d '{"start_date": "2022-01-01", "end_date": "2024-12-31"}'
+git clone https://github.com/lucgmensah/weather-forecasting-api.git
+cd weather-forecasting-api
+docker build -t weather-forecasting-api .
+docker run -p 8000:8000 weather-forecasting-api
 ```
 
-### 3. Entraînement d'un modèle
+Interactive documentation: <http://localhost:8000/docs>
+
+Without Docker:
+
 ```bash
-curl -X POST "http://localhost:8000/train_model" -H "Content-Type: application/json" -d '{"version": "1.0.0", "start_date": "2025-01-01", "end_date": "2025-01-31"}'
+pip install -r requirements.txt
+uvicorn api.main:app --reload
 ```
 
-### 4. Liste des modèles disponibles
+## API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/fetch_data` | Download and store hourly temperatures for a date range |
+| POST | `/train_model` | Train and register a new model version on a date range |
+| GET | `/models` | List registered models |
+| POST | `/predict` | Generate predictions with a given model |
+| POST | `/predictions` | Return stored predictions with their RMSE |
+
 ```bash
-curl -X GET "http://localhost:8000/models"
+curl -X POST http://localhost:8000/fetch_data -H "Content-Type: application/json" \
+  -d '{"start_date": "2022-01-01", "end_date": "2024-12-31"}'
+
+curl -X POST http://localhost:8000/train_model -H "Content-Type: application/json" \
+  -d '{"version": "1.0.0", "start_date": "2022-01-01", "end_date": "2024-12-31"}'
+
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
+  -d '{"model_id": 1, "start_date": "2025-01-01", "end_date": "2025-01-31"}'
 ```
 
-### 5. Génération de prédictions
-```bash
-curl -X POST "http://localhost:8000/predict" -H "Content-Type: application/json" -d '{"model_id": 1, "start_date": "2025-01-01", "end_date": "2025-01-31"}'
-```
+## CI/CD
 
-### 6. Récupération des prédictions stockées avec RMSE
-```bash
-curl -X POST "http://localhost:8000/predictions" -H "Content-Type: application/json" -d '{"model_id": 1, "start_date": "2025-01-01", "end_date": "2025-01-31"}'
-```
+GitHub Actions (`.github/workflows/pipeline.yml`): lint (flake8, black), tests (pytest), versioning from the commit hash, then a Docker image pushed to GitHub Container Registry with a version tag and `latest`.
 
-## Contributeurs
+## Stack
 
-Projet réalisé par LucG Mensah dans le cadre du projet final 2024-2025 ESTIA Bihar.
-Référentiel GitHub: [2024-2025-estia-bihar/final_projet_lucg](https://github.com/2024-2025-estia-bihar/final_projet_lucg)
+Python, FastAPI, scikit-learn, pandas, SQLAlchemy, SQLite, Docker, GitHub Actions.
 
-## Licence
+---
 
-Ce projet est distribué sous licence MIT.
+Final project of the MSc Big Data & AI (BIHAR), ESTIA, 2024-2025. Previously part of `final_projet_lucg`. MIT licence.
